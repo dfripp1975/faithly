@@ -116,12 +116,13 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY || secrets.GEMINIKEY }}
         run: |
           if [ -z "$GEMINI_API_KEY" ]; then echo "No Gemini key provided; skipping."; exit 0; fi
-          code=$(curl -s -o models.json -w "%{http_code}" "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash" -H "x-goog-api-key: $GEMINI_API_KEY")
+          code=$(curl -s -o models.json -w "%{http_code}" "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash" -H "x-goog-api-key: $GEMINI_API_KEY")
           if [ "$code" != "200" ]; then jq -r '.error.message // .' models.json; echo "::error::Google rejected the Gemini key ($code)"; exit 1; fi
-          code=$(curl -s -o gen.json -w "%{http_code}" -X POST "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent" \
+          code=$(curl -s -o gen.json -w "%{http_code}" -X POST "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent" \
             -H "x-goog-api-key: $GEMINI_API_KEY" -H "Content-Type: application/json" \
-            -d '{"contents":[{"role":"user","parts":[{"text":"Reply with the single word: ready"}]}],"generationConfig":{"maxOutputTokens":20}}')
+            -d '{"systemInstruction":{"parts":[{"text":"Respond with JSON only."}]},"contents":[{"role":"user","parts":[{"text":"Return {\"status\": \"ready\"}"}]}],"generationConfig":{"responseMimeType":"application/json","maxOutputTokens":200}}')
           if [ "$code" != "200" ]; then jq -r '.error.message // .' gen.json; echo "::error::Gemini test request failed ($code)"; exit 1; fi
+          jq -r '.candidates[0].content.parts[0].text' gen.json
           echo "Gemini key works."
 
       - name: Smoke test

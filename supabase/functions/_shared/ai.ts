@@ -43,7 +43,7 @@ export async function generateJson(req: AIRequest): Promise<AIResult> {
 }
 
 async function callGemini(req: AIRequest): Promise<AIResult> {
-  const model = Deno.env.get('GEMINI_MODEL') ?? 'gemini-2.5-flash';
+  const model = Deno.env.get('GEMINI_MODEL') ?? 'gemini-3.8-flash';
   const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-goog-api-key': Deno.env.get('GEMINI_API_KEY')! },

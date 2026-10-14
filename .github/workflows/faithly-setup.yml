@@ -8,6 +8,10 @@ name: Faithly setup
 
 on:
   workflow_dispatch:
+    inputs:
+      app_url:
+        description: 'Live app address, e.g. https://faithly.vercel.app (sets sign-in redirects)'
+        required: false
   push:
     branches: [main]
     paths: ['supabase/**', 'scripts/setup-remote.mjs', '.github/workflows/faithly-setup.yml']
@@ -69,6 +73,19 @@ jobs:
           done
           if [ -n "$GEMINI_API_KEY" ]; then args+=("AI_PROVIDER=gemini"); elif [ -n "$OPENAI_API_KEY" ]; then args+=("AI_PROVIDER=openai"); fi
           if [ ${#args[@]} -gt 0 ]; then supabase secrets set --project-ref "$SUPABASE_PROJECT_REF" "${args[@]}"; else echo "No optional secrets provided yet."; fi
+
+      - name: Point sign-in emails and redirects at the live app
+        if: ${{ inputs.app_url != '' && inputs.app_url != null }}
+        env:
+          APP_URL_INPUT: ${{ inputs.app_url }}
+        run: |
+          url="${APP_URL_INPUT%/}"
+          body=$(jq -n --arg u "$url" '{site_url: $u, uri_allow_list: ($u + "/**")}')
+          code=$(curl -s -o auth.json -w "%{http_code}" -X PATCH "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/config/auth" \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" -H "Content-Type: application/json" -d "$body")
+          if [ "$code" != "200" ]; then cat auth.json; echo "::error::Updating auth settings failed ($code)"; exit 1; fi
+          jq '{site_url, uri_allow_list}' auth.json
+          supabase secrets set --project-ref "$SUPABASE_PROJECT_REF" "APP_URL=$url"
 
       - name: Deploy Edge Functions
         # Every function checks the caller itself (signed-in user, Stripe signature or cron secret),

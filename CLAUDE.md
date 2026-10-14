@@ -2,7 +2,7 @@
 
 Self-contained React + TypeScript + Tailwind PWA with a Supabase backend.
 Supabase project ref: dxqpffabvwgvpjqlzblu (London). `.github/workflows/faithly-setup.yml` applies migrations,
-loads the Bible and deploys functions using the SUPABASE_ACCESS_TOKEN repository secret.
+loads the Bible and deploys functions using the SUPABASETOKEN repository secret.
 
 ## Non-negotiables
 - Never put Bible verse text into authored content or AI output. Store references only; text comes from

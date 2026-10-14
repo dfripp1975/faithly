@@ -57,8 +57,22 @@ export async function generateJson(req: AIRequest): Promise<AIResult> {
 }
 
 async function callGemini(req: AIRequest): Promise<AIResult> {
-  const model = Deno.env.get('GEMINI_MODEL') ?? 'gemini-3.8-flash';
-  const res = await fetchWithRetry(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+  // GEMINI_FALLBACK_MODELS (comma-separated) are tried in turn when the main model is overloaded.
+  const models = [Deno.env.get('GEMINI_MODEL') ?? 'gemini-3.8-flash',
+    ...(Deno.env.get('GEMINI_FALLBACK_MODELS') ?? '').split(',').map((m) => m.trim()).filter(Boolean)];
+  let res: Response | null = null;
+  let model = models[0];
+  for (const m of models) {
+    model = m;
+    res = await geminiRequest(m, req);
+    if (res.status !== 429 && res.status !== 503 && res.status !== 500) break;
+    if (m !== models[models.length - 1]) await res.body?.cancel();
+  }
+  return readGemini(res!, model);
+}
+
+function geminiRequest(model: string, req: AIRequest): Promise<Response> {
+  return fetchWithRetry(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-goog-api-key': Deno.env.get('GEMINI_API_KEY')! },
     body: JSON.stringify({
@@ -70,7 +84,10 @@ async function callGemini(req: AIRequest): Promise<AIResult> {
         temperature: req.temperature ?? 0.6,
       },
     }),
-  });
+  }, 2);
+}
+
+async function readGemini(res: Response, model: string): Promise<AIResult> {
   if (!res.ok) throw new AIProviderError(`Gemini error ${res.status}: ${(await res.text()).slice(0, 300)}`);
   const data = await res.json();
   const text: string = data?.candidates?.[0]?.content?.parts?.map((p: { text?: string }) => p.text ?? '').join('') ?? '';

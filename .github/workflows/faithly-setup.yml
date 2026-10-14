@@ -111,25 +111,31 @@ jobs:
             supabase functions deploy "$fn" --project-ref "$SUPABASE_PROJECT_REF" --use-api --no-verify-jwt
           done
 
-      - name: Check the Gemini key works
+      - name: Choose a Gemini model that answers, and set fallbacks
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY || secrets.GEMINIKEY }}
         run: |
           if [ -z "$GEMINI_API_KEY" ]; then echo "No Gemini key provided; skipping."; exit 0; fi
-          code=$(curl -s -o models.json -w "%{http_code}" "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash" -H "x-goog-api-key: $GEMINI_API_KEY")
+          code=$(curl -s -o models.json -w "%{http_code}" "https://generativelanguage.googleapis.com/v1beta/models?pageSize=200" -H "x-goog-api-key: $GEMINI_API_KEY")
           if [ "$code" != "200" ]; then jq -r '.error.message // .' models.json; echo "::error::Google rejected the Gemini key ($code)"; exit 1; fi
-          for attempt in 1 2 3 4 5; do
-            code=$(curl -s -o gen.json -w "%{http_code}" -X POST "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent" \
+          # Text models that support generateContent, newest first; flash models before pro (cheaper, faster).
+          jq -r '.models[] | select(.supportedGenerationMethods | index("generateContent")) | .name | sub("^models/"; "")' models.json \
+            | grep -E '^gemini-[0-9.]+-(flash|pro)' | grep -v -E 'image|tts|audio|live|embedding|preview-tts|thinking-exp' \
+            | sort -t- -k2,2Vr -k3,3 > candidates.txt
+          echo "Available models:"; cat candidates.txt
+          working=()
+          for m in $(grep flash candidates.txt; grep -v flash candidates.txt); do
+            c=$(curl -s -o gen.json -w "%{http_code}" -X POST "https://generativelanguage.googleapis.com/v1beta/models/$m:generateContent" \
               -H "x-goog-api-key: $GEMINI_API_KEY" -H "Content-Type: application/json" \
               -d '{"systemInstruction":{"parts":[{"text":"Respond with JSON only."}]},"contents":[{"role":"user","parts":[{"text":"Return {\"status\": \"ready\"}"}]}],"generationConfig":{"responseMimeType":"application/json","maxOutputTokens":200}}')
-            if [ "$code" = "200" ]; then break; fi
-            jq -r '.error.message // .' gen.json
-            if [ "$code" != "503" ] && [ "$code" != "429" ]; then echo "::error::Gemini test request failed ($code)"; exit 1; fi
-            echo "Gemini busy ($code); retrying in $((attempt * 10))s"; sleep $((attempt * 10))
+            echo "$m -> $c"
+            if [ "$c" = "200" ]; then working+=("$m"); fi
+            [ ${#working[@]} -ge 3 ] && break
           done
-          if [ "$code" != "200" ]; then echo "::warning::Gemini was too busy to answer the test request. The key and model are valid; the app retries automatically."; exit 0; fi
-          jq -r '.candidates[0].content.parts[0].text' gen.json
-          echo "Gemini key works."
+          if [ ${#working[@]} -eq 0 ]; then echo "::error::No Gemini model answered a test request right now."; exit 1; fi
+          primary="${working[0]}"; fallbacks=$(IFS=,; echo "${working[*]:1}")
+          echo "Using $primary (fallbacks: ${fallbacks:-none})"
+          supabase secrets set --project-ref "$SUPABASE_PROJECT_REF" "GEMINI_MODEL=$primary" "GEMINI_FALLBACK_MODELS=$fallbacks"
 
       - name: Smoke test
         run: |

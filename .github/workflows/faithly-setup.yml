@@ -12,6 +12,9 @@ on:
       app_url:
         description: 'Live app address, e.g. https://faithly.vercel.app (sets sign-in redirects)'
         required: false
+      admin_email:
+        description: 'Email of an existing Faithly account to make an administrator'
+        required: false
   push:
     branches: [main]
     paths: ['supabase/**', 'scripts/setup-remote.mjs', '.github/workflows/faithly-setup.yml']
@@ -86,6 +89,19 @@ jobs:
           if [ "$code" != "200" ]; then cat auth.json; echo "::error::Updating auth settings failed ($code)"; exit 1; fi
           jq '{site_url, uri_allow_list}' auth.json
           supabase secrets set --project-ref "$SUPABASE_PROJECT_REF" "APP_URL=$url"
+
+      - name: Make an administrator
+        if: ${{ inputs.admin_email != '' && inputs.admin_email != null }}
+        env:
+          ADMIN_EMAIL: ${{ inputs.admin_email }}
+        run: |
+          if ! [[ "$ADMIN_EMAIL" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then echo "::error::That doesn't look like an email address."; exit 1; fi
+          sql=$(jq -n --arg e "$ADMIN_EMAIL" '{query: ("update public.profiles set is_admin = true where id = (select id from auth.users where lower(email) = lower(\u0027" + $e + "\u0027)) returning id")}')
+          res=$(curl -s -X POST "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/database/query" \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" -H "Content-Type: application/json" -d "$sql")
+          echo "$res"
+          if [ "$(echo "$res" | jq 'length')" != "1" ]; then echo "::error::No account found for that email. Sign up in the app first."; exit 1; fi
+          echo "Administrator added."
 
       - name: Deploy Edge Functions
         # Every function checks the caller itself (signed-in user, Stripe signature or cron secret),

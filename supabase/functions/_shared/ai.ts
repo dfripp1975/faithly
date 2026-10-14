@@ -35,6 +35,20 @@ export function configuredProvider(): 'gemini' | 'openai' | null {
   return null;
 }
 
+/**
+ * fetch with a short retry for temporary provider problems (overloaded or rate-limited),
+ * so a brief spike in demand doesn't surface as an error to the user.
+ */
+async function fetchWithRetry(url: string, init: RequestInit, attempts = 3): Promise<Response> {
+  let res = await fetch(url, init);
+  for (let i = 1; i < attempts && (res.status === 429 || res.status === 500 || res.status === 503); i++) {
+    await res.body?.cancel();
+    await new Promise((r) => setTimeout(r, 800 * 2 ** (i - 1)));
+    res = await fetch(url, init);
+  }
+  return res;
+}
+
 /** Calls the configured provider and returns its JSON text. */
 export async function generateJson(req: AIRequest): Promise<AIResult> {
   const provider = configuredProvider();
@@ -44,7 +58,7 @@ export async function generateJson(req: AIRequest): Promise<AIResult> {
 
 async function callGemini(req: AIRequest): Promise<AIResult> {
   const model = Deno.env.get('GEMINI_MODEL') ?? 'gemini-3.8-flash';
-  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+  const res = await fetchWithRetry(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-goog-api-key': Deno.env.get('GEMINI_API_KEY')! },
     body: JSON.stringify({
@@ -74,7 +88,7 @@ async function callOpenAI(req: AIRequest): Promise<AIResult> {
   const model = Deno.env.get('OPENAI_MODEL') ?? 'gpt-4o-mini';
   // OPENAI_BASE_URL allows OpenAI-compatible endpoints (e.g. Azure OpenAI proxies or a local mock in tests).
   const base = (Deno.env.get('OPENAI_BASE_URL') ?? 'https://api.openai.com/v1').replace(/\/$/, '');
-  const res = await fetch(`${base}/chat/completions`, {
+  const res = await fetchWithRetry(`${base}/chat/completions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${Deno.env.get('OPENAI_API_KEY')}` },
     body: JSON.stringify({

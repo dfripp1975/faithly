@@ -123,17 +123,19 @@ jobs:
             | grep -E '^gemini-[0-9.]+-(flash|pro)' | grep -v -E 'image|tts|audio|live|embedding|preview-tts|thinking-exp' \
             | sort -t- -k2,2Vr -k3,3 > candidates.txt
           echo "Available models:"; cat candidates.txt
-          working=()
+          working=(); busy=()
           for m in $(grep flash candidates.txt; grep -v flash candidates.txt); do
             c=$(curl -s -o gen.json -w "%{http_code}" -X POST "https://generativelanguage.googleapis.com/v1beta/models/$m:generateContent" \
               -H "x-goog-api-key: $GEMINI_API_KEY" -H "Content-Type: application/json" \
               -d '{"systemInstruction":{"parts":[{"text":"Respond with JSON only."}]},"contents":[{"role":"user","parts":[{"text":"Return {\"status\": \"ready\"}"}]}],"generationConfig":{"responseMimeType":"application/json","maxOutputTokens":200}}')
             echo "$m -> $c"
-            if [ "$c" = "200" ]; then working+=("$m"); fi
+            if [ "$c" = "200" ]; then working+=("$m"); elif [ "$c" = "503" ]; then busy+=("$m"); fi
             [ ${#working[@]} -ge 3 ] && break
           done
           if [ ${#working[@]} -eq 0 ]; then echo "::error::No Gemini model answered a test request right now."; exit 1; fi
-          primary="${working[0]}"; fallbacks=$(IFS=,; echo "${working[*]:1}")
+          # Models that were only temporarily busy are kept as later fallbacks (best first).
+          all=("${working[@]}" "${busy[@]:0:3}")
+          primary="${all[0]}"; fallbacks=$(IFS=,; echo "${all[*]:1}")
           echo "Using $primary (fallbacks: ${fallbacks:-none})"
           supabase secrets set --project-ref "$SUPABASE_PROJECT_REF" "GEMINI_MODEL=$primary" "GEMINI_FALLBACK_MODELS=$fallbacks"
 
